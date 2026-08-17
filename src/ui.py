@@ -38,6 +38,9 @@ class FreeWaveUI:
             if key in (ord("q"), ord("Q")):
                 break
 
+            elif key == ord("1"):
+                self.messages_screen(stdscr)
+
             elif key == ord("2"):
                 self.nodes_screen(stdscr)
 
@@ -60,6 +63,93 @@ class FreeWaveUI:
             2,
             f"RADIO: CONNECTED    MESH: {self.radio.get_node_count()} NODES",
         )
+
+    def messages_screen(self, stdscr):
+        while True:
+            stdscr.clear()
+
+            self.draw_header(stdscr)
+
+            stdscr.addstr(5, 4, "MESSAGES")
+            stdscr.addstr(6, 4, "-" * 70)
+
+            messages = self.radio.get_messages()
+
+            row = 8
+
+            if not messages:
+                stdscr.addstr(
+                    row,
+                    6,
+                    "NO MESSAGES RECEIVED",
+                )
+
+            else:
+                for message in messages[:15]:
+                    timestamp = message.get("time", "--:--:--")
+                    sender_id = message.get("from")
+
+                    sender = self.get_sender_name(sender_id)
+
+                    text = message.get("text", "")
+                    text = text.replace("\n", " ")
+
+                    max_width = max(20, stdscr.getmaxyx()[1] - 24)
+
+                    if len(text) > max_width:
+                        text = text[:max_width - 3] + "..."
+
+                    stdscr.addstr(
+                        row,
+                        4,
+                        f"{timestamp}  {sender}",
+                    )
+
+                    row += 1
+
+                    stdscr.addstr(
+                        row,
+                        16,
+                        text,
+                    )
+
+                    row += 2
+
+                    if row >= stdscr.getmaxyx()[0] - 5:
+                        break
+
+            self.draw_footer(stdscr)
+
+            stdscr.addstr(
+                stdscr.getmaxyx()[0] - 3,
+                4,
+                "B  BACK     R  REFRESH",
+            )
+
+            stdscr.refresh()
+
+            key = stdscr.getch()
+
+            if key in (ord("b"), ord("B")):
+                return
+
+            if key in (ord("r"), ord("R")):
+                continue
+
+    def get_sender_name(self, node_id):
+        if not node_id:
+            return "UNKNOWN"
+
+        for node in self.radio.get_nodes():
+            user = node.get("user", {})
+
+            if user.get("id") == node_id:
+                return user.get(
+                    "shortName",
+                    user.get("longName", node_id),
+                )[:12]
+
+        return node_id[:12]
 
     def nodes_screen(self, stdscr):
         while True:
@@ -289,6 +379,14 @@ class FreeWaveUI:
                 row,
                 6,
                 f"VOLTAGE:        {info.get('voltage', 'UNKNOWN')} V",
+            )
+
+            row += 1
+
+            stdscr.addstr(
+                row,
+                6,
+                f"UPTIME:         {info.get('uptime', 'UNKNOWN')} sec",
             )
 
             row += 2

@@ -1,3 +1,7 @@
+from collections import deque
+from datetime import datetime
+
+from pubsub import pub
 from meshtastic.serial_interface import SerialInterface
 
 
@@ -7,14 +11,54 @@ class FreeWaveRadio:
     def __init__(self, port="/dev/ttyACM0"):
         self.port = port
         self.interface = None
+        self.messages = deque(maxlen=100)
 
     def connect(self):
         self.interface = SerialInterface(devPath=self.port)
 
+        pub.subscribe(
+            self._on_message,
+            "meshtastic.receive.text"
+        )
+
     def close(self):
         if self.interface:
+            try:
+                pub.unsubscribe(
+                    self._on_message,
+                    "meshtastic.receive.text"
+                )
+            except Exception:
+                pass
+
             self.interface.close()
             self.interface = None
+
+    def _on_message(self, packet, interface=None):
+        """Receive a Meshtastic text message."""
+
+        decoded = packet.get("decoded", {})
+        text = decoded.get("text")
+
+        if not text:
+            return
+
+        from_id = packet.get("from")
+        to_id = packet.get("to")
+        rx_time = packet.get("rxTime")
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        self.messages.append({
+            "time": timestamp,
+            "from": from_id,
+            "to": to_id,
+            "text": text,
+        })
+
+    def get_messages(self):
+        """Return received messages, newest first."""
+        return list(reversed(self.messages))
 
     def get_node_id(self):
         if not self.interface or not self.interface.myInfo:
