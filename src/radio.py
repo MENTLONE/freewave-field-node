@@ -1,5 +1,7 @@
 from collections import deque
 from datetime import datetime
+from pathlib import Path
+import json
 
 from pubsub import pub
 from meshtastic.serial_interface import SerialInterface
@@ -8,17 +10,33 @@ from meshtastic.serial_interface import SerialInterface
 class FreeWaveRadio:
     """Small wrapper around the Meshtastic Python API."""
 
-    def __init__(self, port="/dev/ttyACM0"):
+    def __init__(
+        self,
+        port="/dev/ttyACM0",
+        message_log="data/messages.jsonl",
+    ):
         self.port = port
         self.interface = None
         self.messages = deque(maxlen=100)
+
+        self.message_log = Path(message_log)
+        self.message_log.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self.load_message_history()
+
+    # ------------------------------------------------------------------
+    # RADIO CONNECTION
+    # ------------------------------------------------------------------
 
     def connect(self):
         self.interface = SerialInterface(devPath=self.port)
 
         pub.subscribe(
             self._on_message,
-            "meshtastic.receive.text"
+            "meshtastic.receive.text",
         )
 
     def close(self):
@@ -26,13 +44,68 @@ class FreeWaveRadio:
             try:
                 pub.unsubscribe(
                     self._on_message,
-                    "meshtastic.receive.text"
+                    "meshtastic.receive.text",
                 )
             except Exception:
                 pass
 
             self.interface.close()
             self.interface = None
+
+    # ------------------------------------------------------------------
+    # MESSAGE PERSISTENCE
+    # ------------------------------------------------------------------
+
+    def save_message(self, message):
+        """Append one message to the persistent JSONL log."""
+
+        try:
+            with self.message_log.open(
+                "a",
+                encoding="utf-8",
+            ) as handle:
+                handle.write(
+                    json.dumps(
+                        message,
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except OSError:
+            # A logging failure must never stop radio operation.
+            pass
+
+    def load_message_history(self):
+        """Load recent messages from the persistent JSONL log."""
+
+        if not self.message_log.exists():
+            return
+
+        try:
+            with self.message_log.open(
+                "r",
+                encoding="utf-8",
+            ) as handle:
+                for line in handle:
+                    line = line.strip()
+
+                    if not line:
+                        continue
+
+                    try:
+                        message = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if isinstance(message, dict):
+                        self.messages.append(message)
+
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
+    # RECEIVE
+    # ------------------------------------------------------------------
 
     def _on_message(self, packet, interface=None):
         """Receive a Meshtastic text message."""
@@ -45,23 +118,38 @@ class FreeWaveRadio:
 
         from_id = packet.get("from")
         to_id = packet.get("to")
-        rx_time = packet.get("rxTime")
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
-
-        self.messages.append({
-            "time": timestamp,
+        message = {
+            "time": datetime.now().strftime("%H:%M:%S"),
             "from": from_id,
             "to": to_id,
-            "text": text,
-        })
+            "text": str(text),
+            "direction": "RX",
+        }
+
+        self.messages.append(message)
+        self.save_message(message)
+
+    # ------------------------------------------------------------------
+    # MESSAGE ACCESS
+    # ------------------------------------------------------------------
 
     def get_messages(self):
-        """Return received messages, newest first."""
+        """Return messages, newest first."""
+
         return list(reversed(self.messages))
 
-    def send_message(self, text, destination="^all", want_ack=False):
-        """Send a Meshtastic text message and record the local TX message."""
+    # ------------------------------------------------------------------
+    # TRANSMISSION
+    # ------------------------------------------------------------------
+
+    def send_message(
+        self,
+        text,
+        destination="^all",
+        want_ack=False,
+    ):
+        """Send a Meshtastic text message and record local TX."""
 
         if not self.interface:
             raise RuntimeError("Radio is not connected")
@@ -77,17 +165,23 @@ class FreeWaveRadio:
             wantAck=want_ack,
         )
 
-        # Record our own transmission locally so the UI immediately
-        # shows what was sent, without waiting for a radio echo.
-        self.messages.append({
+        message = {
             "time": datetime.now().strftime("%H:%M:%S"),
             "from": self.get_node_id(),
             "to": destination,
             "text": text,
             "direction": "TX",
-        })
+        }
+
+        self.messages.append(message)
+        self.save_message(message)
 
         return packet
+
+    # ------------------------------------------------------------------
+    # NODE INFORMATION
+    # ------------------------------------------------------------------
+
     def get_node_id(self):
         if not self.interface or not self.interface.myInfo:
             return None
@@ -123,9 +217,18 @@ class FreeWaveRadio:
         return {
             "id": node.get("num"),
             "node_id": user.get("id"),
-            "long_name": user.get("longName", "Unknown"),
-            "short_name": user.get("shortName", "Unknown"),
-            "hardware": user.get("hwModel", "Unknown"),
+            "long_name": user.get(
+                "longName",
+                "Unknown",
+            ),
+            "short_name": user.get(
+                "shortName",
+                "Unknown",
+            ),
+            "hardware": user.get(
+                "hwModel",
+                "Unknown",
+            ),
             "battery": metrics.get("batteryLevel"),
             "voltage": metrics.get("voltage"),
             "uptime": metrics.get("uptimeSeconds"),
