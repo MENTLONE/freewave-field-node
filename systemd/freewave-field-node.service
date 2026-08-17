@@ -1,0 +1,25 @@
+[Unit]
+Description=FreeWave Signal Society Field Node
+After=local-fs.target dev-ttyACM0.device
+Wants=dev-ttyACM0.device
+
+[Service]
+Type=simple
+User=mentlone
+Group=mentlone
+WorkingDirectory=/home/mentlone/freewave-field-node
+
+ExecStart=/home/mentlone/freewave-field-node/.venv/bin/python /home/mentlone/freewave-field-node/src/main.py
+
+Restart=on-failure
+RestartSec=5
+
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+
+Environment=TERM=linux
+
+[Install]
+WantedBy=multi-user.target
