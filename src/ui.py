@@ -80,42 +80,32 @@ class FreeWaveUI:
             if not messages:
                 stdscr.addstr(
                     row,
-                    6,
+                    4,
                     "NO MESSAGES RECEIVED",
                 )
-
             else:
-                for message in messages[:15]:
+                for message in messages:
                     timestamp = message.get("time", "--:--:--")
                     sender_id = message.get("from")
-
                     sender = self.get_sender_name(sender_id)
 
-                    text = message.get("text", "")
-                    text = text.replace("\n", " ")
+                    text_msg = str(message.get("text", ""))
+                    text_msg = text_msg.replace("\n", " ")
 
                     max_width = max(20, stdscr.getmaxyx()[1] - 24)
 
-                    if len(text) > max_width:
-                        text = text[:max_width - 3] + "..."
+                    if len(text_msg) > max_width:
+                        text_msg = text_msg[:max_width - 3] + "..."
 
                     stdscr.addstr(
                         row,
                         4,
-                        f"{timestamp}  {sender}",
+                        f"{timestamp}  {sender:<12} {text_msg}",
                     )
 
                     row += 1
 
-                    stdscr.addstr(
-                        row,
-                        16,
-                        text,
-                    )
-
-                    row += 2
-
-                    if row >= stdscr.getmaxyx()[0] - 5:
+                    if row >= stdscr.getmaxyx()[0] - 4:
                         break
 
             self.draw_footer(stdscr)
@@ -149,7 +139,7 @@ class FreeWaveUI:
                     user.get("longName", node_id),
                 )[:12]
 
-        return node_id[:12]
+        return str(node_id)[:12]
 
     def nodes_screen(self, stdscr):
         while True:
