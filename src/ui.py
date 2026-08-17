@@ -9,6 +9,8 @@ from status import (
 
 
 class FreeWaveUI:
+    """Curses-based FreeWave Signal Society field-node interface."""
+
     def __init__(self, radio):
         self.radio = radio
 
@@ -68,6 +70,10 @@ class FreeWaveUI:
             f"RADIO: CONNECTED    MESH: {self.radio.get_node_count()} NODES",
         )
 
+    # ------------------------------------------------------------------
+    # MESSAGES
+    # ------------------------------------------------------------------
+
     def messages_screen(self, stdscr):
         while True:
             stdscr.clear()
@@ -109,11 +115,15 @@ class FreeWaveUI:
                     if len(text_msg) > max_width:
                         text_msg = text_msg[:max_width - 3] + "..."
 
-                    stdscr.addstr(
-                        row,
-                        4,
-                        f"{timestamp}  {direction:<2}  {sender:<12} {text_msg}",
-                    )
+                    try:
+                        stdscr.addstr(
+                            row,
+                            4,
+                            f"{timestamp}  {direction:<2}  "
+                            f"{sender:<12} {text_msg}",
+                        )
+                    except curses.error:
+                        pass
 
                     row += 1
 
@@ -138,63 +148,6 @@ class FreeWaveUI:
             if key in (ord("r"), ord("R")):
                 continue
 
-    def send_message_screen(self, stdscr):
-        """Compose and send a broadcast Meshtastic message."""
-
-        message = ""
-
-        while True:
-            stdscr.clear()
-
-            self.draw_header(stdscr)
-
-            stdscr.addstr(5, 4, "SEND MESSAGE")
-            stdscr.addstr(6, 4, "-" * 70)
-
-            stdscr.addstr(8, 4, "DESTINATION: BROADCAST")
-            stdscr.addstr(10, 4, "MESSAGE:")
-            stdscr.addstr(11, 4, "> " + message)
-
-            stdscr.addstr(
-                stdscr.getmaxyx()[0] - 3,
-                4,
-                "ENTER  SEND     B  CANCEL",
-            )
-
-            self.draw_footer(stdscr)
-            stdscr.refresh()
-
-            key = stdscr.getch()
-
-            if key in (ord("b"), ord("B")):
-                return
-
-            if key in (curses.KEY_BACKSPACE, 127, 8):
-                message = message[:-1]
-                continue
-
-            if key in (curses.KEY_ENTER, 10, 13):
-                if not message.strip():
-                    continue
-
-                try:
-                    self.radio.send_message(message)
-                except Exception as exc:
-                    stdscr.addstr(
-                        13,
-                        4,
-                        f"SEND ERROR: {str(exc)[:50]}",
-                    )
-                    stdscr.refresh()
-                    stdscr.getch()
-                    continue
-
-                return
-
-            if 32 <= key <= 126:
-                if len(message) < 200:
-                    message += chr(key)
-
     def get_sender_name(self, node_id):
         if not node_id:
             return "UNKNOWN"
@@ -210,6 +163,284 @@ class FreeWaveUI:
 
         return str(node_id)[:12]
 
+    # ------------------------------------------------------------------
+    # SEND MESSAGE
+    # ------------------------------------------------------------------
+
+    def send_message_screen(self, stdscr):
+        """Compose a broadcast or direct Meshtastic message."""
+
+        message = ""
+        destination = "^all"
+        destination_name = "BROADCAST"
+
+        while True:
+            stdscr.clear()
+
+            self.draw_header(stdscr)
+
+            stdscr.addstr(5, 4, "SEND MESSAGE")
+            stdscr.addstr(6, 4, "-" * 70)
+
+            stdscr.addstr(
+                8,
+                4,
+                f"DESTINATION: {destination_name}",
+            )
+
+            stdscr.addstr(
+                9,
+                4,
+                f"NODE ID:     {destination}",
+            )
+
+            stdscr.addstr(11, 4, "MESSAGE:")
+            stdscr.addstr(12, 4, "> " + message)
+
+            stdscr.addstr(
+                stdscr.getmaxyx()[0] - 4,
+                4,
+                "N  SELECT NODE     ENTER  SEND     B  CANCEL",
+            )
+
+            self.draw_footer(stdscr)
+            stdscr.refresh()
+
+            key = stdscr.getch()
+
+            if key in (ord("b"), ord("B")):
+                return
+
+            # Select destination.
+            if key in (ord("n"), ord("N")):
+                selected = self.select_destination(stdscr)
+
+                if selected:
+                    destination, destination_name = selected
+
+                continue
+
+            # Backspace.
+            if key in (curses.KEY_BACKSPACE, 127, 8):
+                message = message[:-1]
+                continue
+
+            # Send.
+            if key in (curses.KEY_ENTER, 10, 13):
+                if not message.strip():
+                    continue
+
+                try:
+                    self.radio.send_message(
+                        message,
+                        destination=destination,
+                    )
+                except Exception as exc:
+                    self.show_error(
+                        stdscr,
+                        f"SEND ERROR: {str(exc)[:55]}",
+                    )
+                    continue
+
+                return
+
+            # Normal printable character.
+            if 32 <= key <= 126:
+                if len(message) < 200:
+                    message += chr(key)
+
+    # ------------------------------------------------------------------
+    # DESTINATION SELECTOR
+    # ------------------------------------------------------------------
+
+    def select_destination(self, stdscr):
+        """Display live mesh nodes and return (node_id, display_name)."""
+
+        nodes = self.radio.get_nodes()
+
+        entries = [
+            {
+                "id": "^all",
+                "short": "ALL",
+                "long": "BROADCAST",
+                "num": None,
+            }
+        ]
+
+        for node in nodes:
+            user = node.get("user", {})
+
+            node_id = user.get("id")
+
+            if not node_id:
+                continue
+
+            # Don't offer our own node as a direct destination.
+            if node_id == self.radio.get_node_id():
+                continue
+
+            entries.append(
+                {
+                    "id": node_id,
+                    "short": user.get("shortName", "----"),
+                    "long": user.get(
+                        "longName",
+                        node_id,
+                    ),
+                    "num": node.get("num"),
+                }
+            )
+
+        if not entries:
+            return None
+
+        selected = 0
+        top = 0
+
+        while True:
+            stdscr.clear()
+
+            self.draw_header(stdscr)
+
+            stdscr.addstr(
+                5,
+                4,
+                "SELECT DESTINATION",
+            )
+
+            stdscr.addstr(
+                6,
+                4,
+                "-" * 70,
+            )
+
+            stdscr.addstr(
+                7,
+                4,
+                "UP/DOWN  SELECT     ENTER  CHOOSE     B  CANCEL",
+            )
+
+            height, width = stdscr.getmaxyx()
+
+            visible_rows = max(
+                5,
+                height - 12,
+            )
+
+            if selected < top:
+                top = selected
+
+            if selected >= top + visible_rows:
+                top = selected - visible_rows + 1
+
+            for screen_row, index in enumerate(
+                range(
+                    top,
+                    min(
+                        len(entries),
+                        top + visible_rows,
+                    ),
+                )
+            ):
+                entry = entries[index]
+
+                prefix = ">" if index == selected else " "
+
+                short_name = str(
+                    entry["short"]
+                )[:8]
+
+                long_name = str(
+                    entry["long"]
+                )[:32]
+
+                node_id = str(
+                    entry["id"]
+                )[:12]
+
+                line = (
+                    f"{prefix} {short_name:<8} "
+                    f"{long_name:<32} {node_id}"
+                )
+
+                try:
+                    stdscr.addstr(
+                        9 + screen_row,
+                        4,
+                        line[:max(20, width - 8)],
+                    )
+                except curses.error:
+                    pass
+
+            self.draw_footer(stdscr)
+
+            stdscr.refresh()
+
+            key = stdscr.getch()
+
+            if key in (
+                ord("b"),
+                ord("B"),
+                27,
+            ):
+                return None
+
+            if key in (
+                curses.KEY_UP,
+                ord("k"),
+            ):
+                selected = max(
+                    0,
+                    selected - 1,
+                )
+
+            elif key in (
+                curses.KEY_DOWN,
+                ord("j"),
+            ):
+                selected = min(
+                    len(entries) - 1,
+                    selected + 1,
+                )
+
+            elif key in (
+                curses.KEY_ENTER,
+                10,
+                13,
+            ):
+                entry = entries[selected]
+
+                return (
+                    entry["id"],
+                    entry["short"]
+                    if entry["id"] != "^all"
+                    else "BROADCAST",
+                )
+
+    def show_error(self, stdscr, text):
+        height, _ = stdscr.getmaxyx()
+
+        try:
+            stdscr.addstr(
+                height - 5,
+                4,
+                text,
+            )
+            stdscr.addstr(
+                height - 4,
+                4,
+                "PRESS ANY KEY",
+            )
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+        stdscr.getch()
+
+    # ------------------------------------------------------------------
+    # NODES
+    # ------------------------------------------------------------------
+
     def nodes_screen(self, stdscr):
         while True:
             stdscr.clear()
@@ -223,21 +454,37 @@ class FreeWaveUI:
 
             row = 8
 
-            for node in nodes[:20]:
+            for node in nodes:
                 user = node.get("user", {})
 
-                name = user.get("longName", "UNKNOWN")
-                short_name = user.get("shortName", "----")
-                node_id = user.get("id", "--------")
-
-                name = name[:28]
-                short_name = short_name[:8]
-
-                stdscr.addstr(
-                    row,
-                    4,
-                    f"{short_name:<8} {name:<28} {node_id}",
+                name = user.get(
+                    "longName",
+                    "UNKNOWN",
                 )
+
+                short_name = user.get(
+                    "shortName",
+                    "----",
+                )
+
+                node_id = user.get(
+                    "id",
+                    "--------",
+                )
+
+                name = str(name)[:28]
+                short_name = str(short_name)[:8]
+
+                try:
+                    stdscr.addstr(
+                        row,
+                        4,
+                        f"{short_name:<8} "
+                        f"{name:<28} "
+                        f"{node_id}",
+                    )
+                except curses.error:
+                    pass
 
                 row += 1
 
@@ -249,15 +496,28 @@ class FreeWaveUI:
             stdscr.addstr(
                 stdscr.getmaxyx()[0] - 3,
                 4,
-                "B  BACK",
+                "B  BACK     R  REFRESH",
             )
 
             stdscr.refresh()
 
             key = stdscr.getch()
 
-            if key in (ord("b"), ord("B")):
+            if key in (
+                ord("b"),
+                ord("B"),
+            ):
                 return
+
+            if key in (
+                ord("r"),
+                ord("R"),
+            ):
+                continue
+
+    # ------------------------------------------------------------------
+    # STATUS
+    # ------------------------------------------------------------------
 
     def status_screen(self, stdscr):
         while True:
@@ -275,11 +535,19 @@ class FreeWaveUI:
 
             row = 8
 
-            stdscr.addstr(row, 4, "RASPBERRY PI")
+            stdscr.addstr(
+                row,
+                4,
+                "RASPBERRY PI",
+            )
             row += 2
 
             if temp is not None:
-                stdscr.addstr(row, 6, f"CPU TEMP:       {temp:.1f} C")
+                stdscr.addstr(
+                    row,
+                    6,
+                    f"CPU TEMP:       {temp:.1f} C",
+                )
 
             row += 1
 
@@ -287,7 +555,9 @@ class FreeWaveUI:
                 stdscr.addstr(
                     row,
                     6,
-                    f"MEMORY:         {memory['used']} / {memory['total']} MB",
+                    f"MEMORY:         "
+                    f"{memory['used']} / "
+                    f"{memory['total']} MB",
                 )
 
             row += 1
@@ -295,18 +565,24 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"UPTIME:         {format_uptime(uptime)}",
+                f"UPTIME:         "
+                f"{format_uptime(uptime)}",
             )
 
             row += 2
 
-            stdscr.addstr(row, 4, "RADIO")
+            stdscr.addstr(
+                row,
+                4,
+                "RADIO",
+            )
             row += 2
 
             stdscr.addstr(
                 row,
                 6,
-                f"MODEL:          {info.get('hardware', 'UNKNOWN')}",
+                f"MODEL:          "
+                f"{info.get('hardware', 'UNKNOWN')}",
             )
 
             row += 1
@@ -314,7 +590,21 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"NODE:           {info.get('long_name', 'UNKNOWN')}",
+                f"NODE:           "
+                f"{info.get('long_name', 'UNKNOWN')}",
+            )
+
+            row += 1
+
+            battery = info.get(
+                "battery",
+                "UNKNOWN",
+            )
+
+            stdscr.addstr(
+                row,
+                6,
+                f"BATTERY:        {battery}%",
             )
 
             row += 1
@@ -322,26 +612,24 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"BATTERY:        {info.get('battery', 'UNKNOWN')}%",
-            )
-
-            row += 1
-
-            stdscr.addstr(
-                row,
-                6,
-                f"VOLTAGE:        {info.get('voltage', 'UNKNOWN')} V",
+                f"VOLTAGE:        "
+                f"{info.get('voltage', 'UNKNOWN')} V",
             )
 
             row += 2
 
-            stdscr.addstr(row, 4, "MESH")
+            stdscr.addstr(
+                row,
+                4,
+                "MESH",
+            )
             row += 2
 
             stdscr.addstr(
                 row,
                 6,
-                f"NODES:          {self.radio.get_node_count()}",
+                f"NODES:          "
+                f"{self.radio.get_node_count()}",
             )
 
             row += 2
@@ -358,11 +646,21 @@ class FreeWaveUI:
 
             key = stdscr.getch()
 
-            if key in (ord("b"), ord("B")):
+            if key in (
+                ord("b"),
+                ord("B"),
+            ):
                 return
 
-            if key in (ord("r"), ord("R")):
+            if key in (
+                ord("r"),
+                ord("R"),
+            ):
                 continue
+
+    # ------------------------------------------------------------------
+    # RADIO
+    # ------------------------------------------------------------------
 
     def radio_screen(self, stdscr):
         while True:
@@ -370,14 +668,27 @@ class FreeWaveUI:
 
             self.draw_header(stdscr)
 
-            stdscr.addstr(5, 4, "RADIO INFORMATION")
-            stdscr.addstr(6, 4, "-" * 70)
+            stdscr.addstr(
+                5,
+                4,
+                "RADIO INFORMATION",
+            )
+
+            stdscr.addstr(
+                6,
+                4,
+                "-" * 70,
+            )
 
             info = self.radio.get_local_info()
 
             row = 8
 
-            stdscr.addstr(row, 4, "CONNECTION")
+            stdscr.addstr(
+                row,
+                4,
+                "CONNECTION",
+            )
             row += 2
 
             stdscr.addstr(
@@ -388,13 +699,18 @@ class FreeWaveUI:
 
             row += 2
 
-            stdscr.addstr(row, 4, "DEVICE")
+            stdscr.addstr(
+                row,
+                4,
+                "DEVICE",
+            )
             row += 2
 
             stdscr.addstr(
                 row,
                 6,
-                f"MODEL:          {info.get('hardware', 'UNKNOWN')}",
+                f"MODEL:          "
+                f"{info.get('hardware', 'UNKNOWN')}",
             )
 
             row += 1
@@ -402,7 +718,8 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"NODE NAME:      {info.get('long_name', 'UNKNOWN')}",
+                f"NODE NAME:      "
+                f"{info.get('long_name', 'UNKNOWN')}",
             )
 
             row += 1
@@ -410,7 +727,8 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"SHORT NAME:     {info.get('short_name', 'UNKNOWN')}",
+                f"SHORT NAME:     "
+                f"{info.get('short_name', 'UNKNOWN')}",
             )
 
             row += 1
@@ -418,18 +736,24 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"NODE ID:        {info.get('node_id', 'UNKNOWN')}",
+                f"NODE ID:        "
+                f"{info.get('node_id', 'UNKNOWN')}",
             )
 
             row += 2
 
-            stdscr.addstr(row, 4, "RADIO TELEMETRY")
+            stdscr.addstr(
+                row,
+                4,
+                "RADIO TELEMETRY",
+            )
             row += 2
 
             stdscr.addstr(
                 row,
                 6,
-                f"BATTERY:        {info.get('battery', 'UNKNOWN')}%",
+                f"BATTERY:        "
+                f"{info.get('battery', 'UNKNOWN')}%",
             )
 
             row += 1
@@ -437,7 +761,8 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"VOLTAGE:        {info.get('voltage', 'UNKNOWN')} V",
+                f"VOLTAGE:        "
+                f"{info.get('voltage', 'UNKNOWN')} V",
             )
 
             row += 1
@@ -445,7 +770,24 @@ class FreeWaveUI:
             stdscr.addstr(
                 row,
                 6,
-                f"UPTIME:         {info.get('uptime', 'UNKNOWN')} sec",
+                f"UPTIME:         "
+                f"{info.get('uptime', 'UNKNOWN')} sec",
+            )
+
+            row += 2
+
+            stdscr.addstr(
+                row,
+                4,
+                "MESH",
+            )
+            row += 2
+
+            stdscr.addstr(
+                row,
+                6,
+                f"NODES:          "
+                f"{self.radio.get_node_count()}",
             )
 
             row += 2
@@ -462,8 +804,14 @@ class FreeWaveUI:
 
             key = stdscr.getch()
 
-            if key in (ord("b"), ord("B")):
+            if key in (
+                ord("b"),
+                ord("B"),
+            ):
                 return
 
-            if key in (ord("r"), ord("R")):
+            if key in (
+                ord("r"),
+                ord("R"),
+            ):
                 continue
