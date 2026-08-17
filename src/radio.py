@@ -60,6 +60,34 @@ class FreeWaveRadio:
         """Return received messages, newest first."""
         return list(reversed(self.messages))
 
+    def send_message(self, text, destination="^all", want_ack=False):
+        """Send a Meshtastic text message and record the local TX message."""
+
+        if not self.interface:
+            raise RuntimeError("Radio is not connected")
+
+        text = str(text).strip()
+
+        if not text:
+            raise ValueError("Message cannot be empty")
+
+        packet = self.interface.sendText(
+            text,
+            destinationId=destination,
+            wantAck=want_ack,
+        )
+
+        # Record our own transmission locally so the UI immediately
+        # shows what was sent, without waiting for a radio echo.
+        self.messages.append({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "from": self.get_node_id(),
+            "to": destination,
+            "text": text,
+            "direction": "TX",
+        })
+
+        return packet
     def get_node_id(self):
         if not self.interface or not self.interface.myInfo:
             return None

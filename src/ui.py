@@ -27,7 +27,8 @@ class FreeWaveUI:
             stdscr.addstr(6, 4, "2  NODES")
             stdscr.addstr(7, 4, "3  STATUS")
             stdscr.addstr(8, 4, "4  RADIO")
-            stdscr.addstr(10, 4, "Q  QUIT")
+            stdscr.addstr(9, 4, "5  SEND MESSAGE")
+            stdscr.addstr(11, 4, "Q  QUIT")
 
             self.draw_footer(stdscr)
 
@@ -49,6 +50,9 @@ class FreeWaveUI:
 
             elif key == ord("4"):
                 self.radio_screen(stdscr)
+
+            elif key == ord("5"):
+                self.send_message_screen(stdscr)
 
     def draw_header(self, stdscr):
         stdscr.addstr(0, 2, "FREEWAVE SIGNAL SOCIETY")
@@ -125,6 +129,63 @@ class FreeWaveUI:
 
             if key in (ord("r"), ord("R")):
                 continue
+
+    def send_message_screen(self, stdscr):
+        """Compose and send a broadcast Meshtastic message."""
+
+        message = ""
+
+        while True:
+            stdscr.clear()
+
+            self.draw_header(stdscr)
+
+            stdscr.addstr(5, 4, "SEND MESSAGE")
+            stdscr.addstr(6, 4, "-" * 70)
+
+            stdscr.addstr(8, 4, "DESTINATION: BROADCAST")
+            stdscr.addstr(10, 4, "MESSAGE:")
+            stdscr.addstr(11, 4, "> " + message)
+
+            stdscr.addstr(
+                stdscr.getmaxyx()[0] - 3,
+                4,
+                "ENTER  SEND     B  CANCEL",
+            )
+
+            self.draw_footer(stdscr)
+            stdscr.refresh()
+
+            key = stdscr.getch()
+
+            if key in (ord("b"), ord("B")):
+                return
+
+            if key in (curses.KEY_BACKSPACE, 127, 8):
+                message = message[:-1]
+                continue
+
+            if key in (curses.KEY_ENTER, 10, 13):
+                if not message.strip():
+                    continue
+
+                try:
+                    self.radio.send_message(message)
+                except Exception as exc:
+                    stdscr.addstr(
+                        13,
+                        4,
+                        f"SEND ERROR: {str(exc)[:50]}",
+                    )
+                    stdscr.refresh()
+                    stdscr.getch()
+                    continue
+
+                return
+
+            if 32 <= key <= 126:
+                if len(message) < 200:
+                    message += chr(key)
 
     def get_sender_name(self, node_id):
         if not node_id:
