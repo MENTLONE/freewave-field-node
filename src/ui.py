@@ -90,13 +90,21 @@ class FreeWaveUI:
             else:
                 for message in messages:
                     timestamp = message.get("time", "--:--:--")
-                    sender_id = message.get("from")
-                    sender = self.get_sender_name(sender_id)
+                    direction = message.get("direction", "RX")
+
+                    if direction == "TX":
+                        sender = "LOCAL"
+                    else:
+                        sender_id = message.get("from")
+                        sender = self.get_sender_name(sender_id)
 
                     text_msg = str(message.get("text", ""))
                     text_msg = text_msg.replace("\n", " ")
 
-                    max_width = max(20, stdscr.getmaxyx()[1] - 24)
+                    max_width = max(
+                        20,
+                        stdscr.getmaxyx()[1] - 28,
+                    )
 
                     if len(text_msg) > max_width:
                         text_msg = text_msg[:max_width - 3] + "..."
@@ -104,7 +112,7 @@ class FreeWaveUI:
                     stdscr.addstr(
                         row,
                         4,
-                        f"{timestamp}  {sender:<12} {text_msg}",
+                        f"{timestamp}  {direction:<2}  {sender:<12} {text_msg}",
                     )
 
                     row += 1
