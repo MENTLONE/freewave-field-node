@@ -17,8 +17,13 @@ class FreeWaveUI:
     def run(self):
         curses.wrapper(self._main)
 
+    # ------------------------------------------------------------------
+    # MAIN MENU
+    # ------------------------------------------------------------------
+
     def _main(self, stdscr):
         curses.curs_set(0)
+        stdscr.keypad(True)
 
         while True:
             stdscr.clear()
@@ -56,6 +61,10 @@ class FreeWaveUI:
             elif key == ord("5"):
                 self.send_message_screen(stdscr)
 
+    # ------------------------------------------------------------------
+    # HEADER / FOOTER
+    # ------------------------------------------------------------------
+
     def draw_header(self, stdscr):
         stdscr.addstr(0, 2, "FREEWAVE SIGNAL SOCIETY")
         stdscr.addstr(1, 2, "CHICAGO DIVISION — FIELD NODE")
@@ -64,11 +73,14 @@ class FreeWaveUI:
     def draw_footer(self, stdscr):
         height, _ = stdscr.getmaxyx()
 
-        stdscr.addstr(
-            height - 2,
-            2,
-            f"RADIO: CONNECTED    MESH: {self.radio.get_node_count()} NODES",
-        )
+        try:
+            stdscr.addstr(
+                height - 2,
+                2,
+                f"RADIO: CONNECTED    MESH: {self.radio.get_node_count()} NODES",
+            )
+        except curses.error:
+            pass
 
     # ------------------------------------------------------------------
     # MESSAGES
@@ -132,11 +144,14 @@ class FreeWaveUI:
 
             self.draw_footer(stdscr)
 
-            stdscr.addstr(
-                stdscr.getmaxyx()[0] - 3,
-                4,
-                "B  BACK     R  REFRESH",
-            )
+            try:
+                stdscr.addstr(
+                    stdscr.getmaxyx()[0] - 3,
+                    4,
+                    "B  BACK     R  REFRESH",
+                )
+            except curses.error:
+                pass
 
             stdscr.refresh()
 
@@ -174,6 +189,8 @@ class FreeWaveUI:
         destination = "^all"
         destination_name = "BROADCAST"
 
+        stdscr.keypad(True)
+
         while True:
             stdscr.clear()
 
@@ -197,36 +214,60 @@ class FreeWaveUI:
             stdscr.addstr(11, 4, "MESSAGE:")
             stdscr.addstr(12, 4, "> " + message)
 
-            stdscr.addstr(
-                stdscr.getmaxyx()[0] - 4,
-                4,
-                "N  SELECT NODE     ENTER  SEND     B  CANCEL",
-            )
+            try:
+                stdscr.addstr(
+                    stdscr.getmaxyx()[0] - 4,
+                    4,
+                    "N  SELECT NODE     ENTER  SEND     B  CANCEL",
+                )
+            except curses.error:
+                pass
 
             self.draw_footer(stdscr)
             stdscr.refresh()
 
             key = stdscr.getch()
 
-            if key in (ord("b"), ord("B")):
+            # ----------------------------------------------------------
+            # BACK
+            # ----------------------------------------------------------
+
+            if key in (ord("b"), ord("B"), 27):
                 return
 
-            # Select destination.
+            # ----------------------------------------------------------
+            # NODE SELECTOR
+            # ----------------------------------------------------------
+
             if key in (ord("n"), ord("N")):
                 selected = self.select_destination(stdscr)
 
-                if selected:
+                if selected is not None:
                     destination, destination_name = selected
 
                 continue
 
-            # Backspace.
-            if key in (curses.KEY_BACKSPACE, 127, 8):
+            # ----------------------------------------------------------
+            # BACKSPACE
+            # ----------------------------------------------------------
+
+            if key in (
+                curses.KEY_BACKSPACE,
+                127,
+                8,
+            ):
                 message = message[:-1]
                 continue
 
-            # Send.
-            if key in (curses.KEY_ENTER, 10, 13):
+            # ----------------------------------------------------------
+            # SEND
+            # ----------------------------------------------------------
+
+            if key in (
+                curses.KEY_ENTER,
+                10,
+                13,
+            ):
                 if not message.strip():
                     continue
 
@@ -235,6 +276,7 @@ class FreeWaveUI:
                         message,
                         destination=destination,
                     )
+
                 except Exception as exc:
                     self.show_error(
                         stdscr,
@@ -244,7 +286,10 @@ class FreeWaveUI:
 
                 return
 
-            # Normal printable character.
+            # ----------------------------------------------------------
+            # NORMAL PRINTABLE CHARACTER
+            # ----------------------------------------------------------
+
             if 32 <= key <= 126:
                 if len(message) < 200:
                     message += chr(key)
@@ -254,7 +299,16 @@ class FreeWaveUI:
     # ------------------------------------------------------------------
 
     def select_destination(self, stdscr):
-        """Display live mesh nodes and return (node_id, display_name)."""
+        """
+        Display live mesh nodes and return:
+
+            (node_id, display_name)
+
+        This selector intentionally stays in its own curses loop until
+        the user chooses a node or explicitly cancels.
+        """
+
+        stdscr.keypad(True)
 
         nodes = self.radio.get_nodes()
 
@@ -275,7 +329,7 @@ class FreeWaveUI:
             if not node_id:
                 continue
 
-            # Don't offer our own node as a direct destination.
+            # Never offer our own node as a direct destination.
             if node_id == self.radio.get_node_id():
                 continue
 
@@ -291,8 +345,16 @@ class FreeWaveUI:
                 }
             )
 
+        # There should always be at least the broadcast entry.
         if not entries:
-            return None
+            entries = [
+                {
+                    "id": "^all",
+                    "short": "ALL",
+                    "long": "BROADCAST",
+                    "num": None,
+                }
+            ]
 
         selected = 0
         top = 0
@@ -302,23 +364,28 @@ class FreeWaveUI:
 
             self.draw_header(stdscr)
 
-            stdscr.addstr(
-                5,
-                4,
-                "SELECT DESTINATION",
-            )
+            try:
+                stdscr.addstr(
+                    5,
+                    4,
+                    "SELECT DESTINATION",
+                    curses.A_BOLD,
+                )
 
-            stdscr.addstr(
-                6,
-                4,
-                "-" * 70,
-            )
+                stdscr.addstr(
+                    6,
+                    4,
+                    "-" * 70,
+                )
 
-            stdscr.addstr(
-                7,
-                4,
-                "UP/DOWN  SELECT     ENTER  CHOOSE     B  CANCEL",
-            )
+                stdscr.addstr(
+                    7,
+                    4,
+                    "UP/DOWN or J/K  SELECT     ENTER  CHOOSE     B  CANCEL",
+                )
+
+            except curses.error:
+                pass
 
             height, width = stdscr.getmaxyx()
 
@@ -333,15 +400,15 @@ class FreeWaveUI:
             if selected >= top + visible_rows:
                 top = selected - visible_rows + 1
 
-            for screen_row, index in enumerate(
-                range(
-                    top,
-                    min(
-                        len(entries),
-                        top + visible_rows,
-                    ),
-                )
-            ):
+            visible_entries = range(
+                top,
+                min(
+                    len(entries),
+                    top + visible_rows,
+                ),
+            )
+
+            for screen_row, index in enumerate(visible_entries):
                 entry = entries[index]
 
                 prefix = ">" if index == selected else " "
@@ -364,20 +431,47 @@ class FreeWaveUI:
                 )
 
                 try:
-                    stdscr.addstr(
-                        9 + screen_row,
-                        4,
-                        line[:max(20, width - 8)],
-                    )
+                    if index == selected:
+                        stdscr.addstr(
+                            9 + screen_row,
+                            4,
+                            line[:max(20, width - 8)],
+                            curses.A_REVERSE,
+                        )
+                    else:
+                        stdscr.addstr(
+                            9 + screen_row,
+                            4,
+                            line[:max(20, width - 8)],
+                        )
+
                 except curses.error:
                     pass
+
+            # Helpful live count.
+            try:
+                stdscr.addstr(
+                    height - 5,
+                    4,
+                    f"AVAILABLE DESTINATIONS: {len(entries)}",
+                )
+            except curses.error:
+                pass
 
             self.draw_footer(stdscr)
 
             stdscr.refresh()
 
+            # ----------------------------------------------------------
+            # WAIT HERE.
+            #
+            # The selector remains active until a valid selector command
+            # is received. This prevents accidental return to SEND.
+            # ----------------------------------------------------------
+
             key = stdscr.getch()
 
+            # CANCEL
             if key in (
                 ord("b"),
                 ord("B"),
@@ -385,24 +479,29 @@ class FreeWaveUI:
             ):
                 return None
 
-            if key in (
+            # UP
+            elif key in (
                 curses.KEY_UP,
                 ord("k"),
+                ord("K"),
             ):
                 selected = max(
                     0,
                     selected - 1,
                 )
 
+            # DOWN
             elif key in (
                 curses.KEY_DOWN,
                 ord("j"),
+                ord("J"),
             ):
                 selected = min(
                     len(entries) - 1,
                     selected + 1,
                 )
 
+            # ENTER
             elif key in (
                 curses.KEY_ENTER,
                 10,
@@ -412,10 +511,26 @@ class FreeWaveUI:
 
                 return (
                     entry["id"],
-                    entry["short"]
-                    if entry["id"] != "^all"
-                    else "BROADCAST",
+                    (
+                        entry["short"]
+                        if entry["id"] != "^all"
+                        else "BROADCAST"
+                    ),
                 )
+
+            # ----------------------------------------------------------
+            # Ignore everything else.
+            #
+            # This is intentional. A stray key cannot accidentally exit
+            # the selector.
+            # ----------------------------------------------------------
+
+            else:
+                continue
+
+    # ------------------------------------------------------------------
+    # ERROR DISPLAY
+    # ------------------------------------------------------------------
 
     def show_error(self, stdscr, text):
         height, _ = stdscr.getmaxyx()
@@ -426,11 +541,13 @@ class FreeWaveUI:
                 4,
                 text,
             )
+
             stdscr.addstr(
                 height - 4,
                 4,
                 "PRESS ANY KEY",
             )
+
         except curses.error:
             pass
 
@@ -442,6 +559,8 @@ class FreeWaveUI:
     # ------------------------------------------------------------------
 
     def nodes_screen(self, stdscr):
+        stdscr.keypad(True)
+
         while True:
             stdscr.clear()
 
@@ -493,11 +612,14 @@ class FreeWaveUI:
 
             self.draw_footer(stdscr)
 
-            stdscr.addstr(
-                stdscr.getmaxyx()[0] - 3,
-                4,
-                "B  BACK     R  REFRESH",
-            )
+            try:
+                stdscr.addstr(
+                    stdscr.getmaxyx()[0] - 3,
+                    4,
+                    "B  BACK     R  REFRESH",
+                )
+            except curses.error:
+                pass
 
             stdscr.refresh()
 
@@ -520,6 +642,8 @@ class FreeWaveUI:
     # ------------------------------------------------------------------
 
     def status_screen(self, stdscr):
+        stdscr.keypad(True)
+
         while True:
             stdscr.clear()
 
@@ -528,119 +652,55 @@ class FreeWaveUI:
             stdscr.addstr(5, 4, "SYSTEM STATUS")
             stdscr.addstr(6, 4, "-" * 70)
 
-            temp = get_cpu_temperature()
-            memory = get_memory()
-            uptime = get_uptime()
-            info = self.radio.get_local_info()
+            try:
+                cpu_temp = get_cpu_temperature()
+            except Exception:
+                cpu_temp = "N/A"
 
-            row = 8
+            try:
+                memory = get_memory()
+            except Exception:
+                memory = "N/A"
 
-            stdscr.addstr(
-                row,
-                4,
-                "RASPBERRY PI",
-            )
-            row += 2
+            try:
+                uptime = format_uptime(
+                    get_uptime()
+                )
+            except Exception:
+                uptime = "N/A"
 
-            if temp is not None:
+            try:
                 stdscr.addstr(
-                    row,
-                    6,
-                    f"CPU TEMP:       {temp:.1f} C",
+                    9,
+                    4,
+                    f"CPU TEMPERATURE: {cpu_temp}",
                 )
 
-            row += 1
-
-            if memory:
                 stdscr.addstr(
-                    row,
-                    6,
-                    f"MEMORY:         "
-                    f"{memory['used']} / "
-                    f"{memory['total']} MB",
+                    11,
+                    4,
+                    f"MEMORY:          {memory}",
                 )
 
-            row += 1
+                stdscr.addstr(
+                    13,
+                    4,
+                    f"UPTIME:           {uptime}",
+                )
 
-            stdscr.addstr(
-                row,
-                6,
-                f"UPTIME:         "
-                f"{format_uptime(uptime)}",
-            )
-
-            row += 2
-
-            stdscr.addstr(
-                row,
-                4,
-                "RADIO",
-            )
-            row += 2
-
-            stdscr.addstr(
-                row,
-                6,
-                f"MODEL:          "
-                f"{info.get('hardware', 'UNKNOWN')}",
-            )
-
-            row += 1
-
-            stdscr.addstr(
-                row,
-                6,
-                f"NODE:           "
-                f"{info.get('long_name', 'UNKNOWN')}",
-            )
-
-            row += 1
-
-            battery = info.get(
-                "battery",
-                "UNKNOWN",
-            )
-
-            stdscr.addstr(
-                row,
-                6,
-                f"BATTERY:        {battery}%",
-            )
-
-            row += 1
-
-            stdscr.addstr(
-                row,
-                6,
-                f"VOLTAGE:        "
-                f"{info.get('voltage', 'UNKNOWN')} V",
-            )
-
-            row += 2
-
-            stdscr.addstr(
-                row,
-                4,
-                "MESH",
-            )
-            row += 2
-
-            stdscr.addstr(
-                row,
-                6,
-                f"NODES:          "
-                f"{self.radio.get_node_count()}",
-            )
-
-            row += 2
-
-            stdscr.addstr(
-                row,
-                4,
-                "B  BACK     R  REFRESH",
-            )
+            except curses.error:
+                pass
 
             self.draw_footer(stdscr)
+
+            try:
+                stdscr.addstr(
+                    stdscr.getmaxyx()[0] - 3,
+                    4,
+                    "B  BACK     R  REFRESH",
+                )
+            except curses.error:
+                pass
 
             stdscr.refresh()
 
@@ -663,142 +723,88 @@ class FreeWaveUI:
     # ------------------------------------------------------------------
 
     def radio_screen(self, stdscr):
+        stdscr.keypad(True)
+
         while True:
             stdscr.clear()
 
             self.draw_header(stdscr)
 
-            stdscr.addstr(
-                5,
-                4,
-                "RADIO INFORMATION",
-            )
+            stdscr.addstr(5, 4, "RADIO STATUS")
+            stdscr.addstr(6, 4, "-" * 70)
 
-            stdscr.addstr(
-                6,
-                4,
-                "-" * 70,
-            )
+            node_id = self.radio.get_node_id()
+            node_count = self.radio.get_node_count()
 
             info = self.radio.get_local_info()
 
-            row = 8
+            try:
+                stdscr.addstr(
+                    9,
+                    4,
+                    "RADIO:             CONNECTED",
+                )
 
-            stdscr.addstr(
-                row,
-                4,
-                "CONNECTION",
-            )
-            row += 2
+                stdscr.addstr(
+                    11,
+                    4,
+                    f"LOCAL NODE:        {node_id or 'UNKNOWN'}",
+                )
 
-            stdscr.addstr(
-                row,
-                6,
-                "STATUS:         CONNECTED",
-            )
+                stdscr.addstr(
+                    13,
+                    4,
+                    f"MESH NODES:        {node_count}",
+                )
 
-            row += 2
+                stdscr.addstr(
+                    15,
+                    4,
+                    f"LONG NAME:         {info.get('long_name', 'Unknown')}",
+                )
 
-            stdscr.addstr(
-                row,
-                4,
-                "DEVICE",
-            )
-            row += 2
+                stdscr.addstr(
+                    16,
+                    4,
+                    f"SHORT NAME:        {info.get('short_name', 'Unknown')}",
+                )
 
-            stdscr.addstr(
-                row,
-                6,
-                f"MODEL:          "
-                f"{info.get('hardware', 'UNKNOWN')}",
-            )
+                stdscr.addstr(
+                    17,
+                    4,
+                    f"HARDWARE:          {info.get('hardware', 'Unknown')}",
+                )
 
-            row += 1
+                battery = info.get("battery")
+                voltage = info.get("voltage")
 
-            stdscr.addstr(
-                row,
-                6,
-                f"NODE NAME:      "
-                f"{info.get('long_name', 'UNKNOWN')}",
-            )
+                if battery is not None:
+                    stdscr.addstr(
+                        19,
+                        4,
+                        f"BATTERY:           {battery}%",
+                    )
 
-            row += 1
+                if voltage is not None:
+                    stdscr.addstr(
+                        20,
+                        4,
+                        f"VOLTAGE:           {voltage} V",
+                    )
 
-            stdscr.addstr(
-                row,
-                6,
-                f"SHORT NAME:     "
-                f"{info.get('short_name', 'UNKNOWN')}",
-            )
-
-            row += 1
-
-            stdscr.addstr(
-                row,
-                6,
-                f"NODE ID:        "
-                f"{info.get('node_id', 'UNKNOWN')}",
-            )
-
-            row += 2
-
-            stdscr.addstr(
-                row,
-                4,
-                "RADIO TELEMETRY",
-            )
-            row += 2
-
-            stdscr.addstr(
-                row,
-                6,
-                f"BATTERY:        "
-                f"{info.get('battery', 'UNKNOWN')}%",
-            )
-
-            row += 1
-
-            stdscr.addstr(
-                row,
-                6,
-                f"VOLTAGE:        "
-                f"{info.get('voltage', 'UNKNOWN')} V",
-            )
-
-            row += 1
-
-            stdscr.addstr(
-                row,
-                6,
-                f"UPTIME:         "
-                f"{info.get('uptime', 'UNKNOWN')} sec",
-            )
-
-            row += 2
-
-            stdscr.addstr(
-                row,
-                4,
-                "MESH",
-            )
-            row += 2
-
-            stdscr.addstr(
-                row,
-                6,
-                f"NODES:          "
-                f"{self.radio.get_node_count()}",
-            )
-
-            row += 2
-
-            stdscr.addstr(
-                row,
-                4,
-                "B  BACK     R  REFRESH",
-            )
+            except curses.error:
+                pass
 
             self.draw_footer(stdscr)
+
+            try:
+                stdscr.addstr(
+                    stdscr.getmaxyx()[0] - 3,
+                    4,
+                    "B  BACK     R  REFRESH",
+                )
+            except curses.error:
+                pass
 
             stdscr.refresh()
 
