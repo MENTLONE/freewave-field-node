@@ -13,7 +13,9 @@ echo
 # Installation paths
 # --------------------------------------------------
 
-PROJECT_DIR="$HOME/freewave-field-node"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$SCRIPT_DIR"
+
 SERVICE_NAME="freewave-field-node"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -22,6 +24,10 @@ CURRENT_GROUP="$(id -gn)"
 
 echo "Installation user:"
 echo "  $CURRENT_USER"
+echo
+
+echo "Installation group:"
+echo "  $CURRENT_GROUP"
 echo
 
 echo "Installation directory:"
@@ -54,7 +60,7 @@ sudo apt install -y \
     git
 
 # --------------------------------------------------
-# 3. Verify repository
+# 3. Check FreeWave repository
 # --------------------------------------------------
 
 echo
@@ -62,12 +68,20 @@ echo "[3/7] Checking FreeWave repository..."
 
 if [ ! -d "$PROJECT_DIR/.git" ]; then
     echo
-    echo "FreeWave repository not found at:"
+    echo "ERROR: FreeWave repository not found."
+    echo
+    echo "Expected repository directory:"
     echo "  $PROJECT_DIR"
     echo
-    echo "Clone the repository first:"
+    echo "The installer must be run from inside"
+    echo "a cloned FreeWave repository."
     echo
-    echo "  git clone git@github.com:MENTLONE/freewave-field-node.git"
+    echo "Example:"
+    echo
+    echo "  git clone https://github.com/MENTLONE/freewave-field-node.git"
+    echo "  cd freewave-field-node"
+    echo "  chmod +x setup.sh"
+    echo "  ./setup.sh"
     echo
     exit 1
 fi
@@ -94,22 +108,22 @@ fi
 echo
 echo "[5/7] Installing Python dependencies..."
 
-source .venv/bin/activate
+source "$PROJECT_DIR/.venv/bin/activate"
 
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r "$PROJECT_DIR/requirements.txt"
 
 deactivate
 
 # --------------------------------------------------
-# 6. Install dynamic systemd service
+# 6. Install systemd service
 # --------------------------------------------------
 
 echo
 echo "[6/7] Installing FreeWave systemd service..."
 
 echo
-echo "Generating systemd service for:"
+echo "Generating service configuration:"
 echo "  User:       $CURRENT_USER"
 echo "  Group:      $CURRENT_GROUP"
 echo "  Directory:  $PROJECT_DIR"
@@ -152,8 +166,8 @@ sudo systemctl enable "$SERVICE_NAME"
 
 echo
 echo "[7/7] Installation complete."
-
 echo
+
 echo "=========================================="
 echo " FREEWAVE FIELD NODE INSTALLED"
 echo "=========================================="
@@ -161,45 +175,44 @@ echo
 
 echo "User:"
 echo "  $CURRENT_USER"
-
 echo
+
+echo "Group:"
+echo "  $CURRENT_GROUP"
+echo
+
 echo "Repository:"
 echo "  $PROJECT_DIR"
-
 echo
+
 echo "Virtual environment:"
 echo "  $PROJECT_DIR/.venv"
-
 echo
+
 echo "Service:"
 echo "  $SERVICE_NAME"
-
 echo
+
 echo "Service file:"
 echo "  $SERVICE_FILE"
-
 echo
+
 echo "To start FreeWave now:"
 echo
 echo "  sudo systemctl start $SERVICE_NAME"
-
 echo
+
 echo "To check the service:"
 echo
 echo "  sudo systemctl status $SERVICE_NAME --no-pager"
-
 echo
-echo "To view logs:"
+
+echo "To view recent logs:"
 echo
 echo "  sudo journalctl -u $SERVICE_NAME -n 100 --no-pager"
-
 echo
+
 echo "To follow live logs:"
 echo
 echo "  sudo journalctl -u $SERVICE_NAME -f"
-
-echo
-echo "=========================================="
-echo " INSTALLATION READY"
-echo "=========================================="
 echo
