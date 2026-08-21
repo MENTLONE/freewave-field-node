@@ -2,13 +2,14 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 import json
+import threading
 
 from pubsub import pub
 from meshtastic.serial_interface import SerialInterface
 
 
 class FreeWaveRadio:
-    """Small wrapper around the Meshtastic Python API."""
+    """Small, defensive wrapper around the Meshtastic Python API."""
 
     def __init__(
         self,
@@ -25,6 +26,9 @@ class FreeWaveRadio:
             exist_ok=True,
         )
 
+        self._lock = threading.RLock()
+        self._connected = False
+
         self.load_message_history()
 
     # ------------------------------------------------------------------
@@ -32,15 +36,43 @@ class FreeWaveRadio:
     # ------------------------------------------------------------------
 
     def connect(self):
-        self.interface = SerialInterface(devPath=self.port)
+        """Connect to the Meshtastic radio."""
 
-        pub.subscribe(
-            self._on_message,
-            "meshtastic.receive.text",
-        )
+        with self._lock:
+            if self.interface is not None:
+                return
+
+            # Subscribe before opening the serial interface so that
+            # messages arriving immediately during startup are not missed.
+            pub.subscribe(
+                self._on_message,
+                "meshtastic.receive.text",
+            )
+
+            try:
+                self.interface = SerialInterface(
+                    devPath=self.port
+                )
+                self._connected = True
+
+            except Exception:
+                self.interface = None
+                self._connected = False
+
+                try:
+                    pub.unsubscribe(
+                        self._on_message,
+                        "meshtastic.receive.text",
+                    )
+                except Exception:
+                    pass
+
+                raise
 
     def close(self):
-        if self.interface:
+        """Cleanly close the radio connection."""
+
+        with self._lock:
             try:
                 pub.unsubscribe(
                     self._on_message,
@@ -49,8 +81,22 @@ class FreeWaveRadio:
             except Exception:
                 pass
 
-            self.interface.close()
+            if self.interface:
+                try:
+                    self.interface.close()
+                except Exception:
+                    pass
+
             self.interface = None
+            self._connected = False
+
+    def is_connected(self):
+        """Return True when the radio interface is active."""
+
+        return bool(
+            self.interface is not None
+            and self._connected
+        )
 
     # ------------------------------------------------------------------
     # MESSAGE PERSISTENCE
@@ -71,8 +117,9 @@ class FreeWaveRadio:
                     )
                     + "\n"
                 )
+
         except OSError:
-            # A logging failure must never stop radio operation.
+            # Logging failure must never stop radio operation.
             pass
 
     def load_message_history(self):
@@ -86,6 +133,7 @@ class FreeWaveRadio:
                 "r",
                 encoding="utf-8",
             ) as handle:
+
                 for line in handle:
                     line = line.strip()
 
@@ -110,25 +158,39 @@ class FreeWaveRadio:
     def _on_message(self, packet, interface=None):
         """Receive a Meshtastic text message."""
 
-        decoded = packet.get("decoded", {})
-        text = decoded.get("text")
+        try:
+            decoded = packet.get(
+                "decoded",
+                {},
+            )
 
-        if not text:
+            text = decoded.get("text")
+
+            if not text:
+                return
+
+            from_id = packet.get("from")
+            to_id = packet.get("to")
+
+            message = {
+                "time": datetime.now().strftime(
+                    "%H:%M:%S"
+                ),
+                "from": from_id,
+                "to": to_id,
+                "text": str(text),
+                "direction": "RX",
+            }
+
+            with self._lock:
+                self.messages.append(message)
+
+            self.save_message(message)
+
+        except Exception:
+            # Never allow a malformed received packet to break
+            # the FreeWave application.
             return
-
-        from_id = packet.get("from")
-        to_id = packet.get("to")
-
-        message = {
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "from": from_id,
-            "to": to_id,
-            "text": str(text),
-            "direction": "RX",
-        }
-
-        self.messages.append(message)
-        self.save_message(message)
 
     # ------------------------------------------------------------------
     # MESSAGE ACCESS
@@ -137,7 +199,10 @@ class FreeWaveRadio:
     def get_messages(self):
         """Return messages, newest first."""
 
-        return list(reversed(self.messages))
+        with self._lock:
+            return list(
+                reversed(self.messages)
+            )
 
     # ------------------------------------------------------------------
     # TRANSMISSION
@@ -151,72 +216,123 @@ class FreeWaveRadio:
     ):
         """Send a Meshtastic text message and record local TX."""
 
-        if not self.interface:
-            raise RuntimeError("Radio is not connected")
+        with self._lock:
+            if not self.interface:
+                raise RuntimeError(
+                    "Radio is not connected"
+                )
 
-        text = str(text).strip()
+            text = str(text).strip()
 
-        if not text:
-            raise ValueError("Message cannot be empty")
+            if not text:
+                raise ValueError(
+                    "Message cannot be empty"
+                )
 
-        packet = self.interface.sendText(
-            text,
-            destinationId=destination,
-            wantAck=want_ack,
-        )
+            packet = self.interface.sendText(
+                text,
+                destinationId=destination,
+                wantAck=want_ack,
+            )
 
-        message = {
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "from": self.get_node_id(),
-            "to": destination,
-            "text": text,
-            "direction": "TX",
-        }
+            message = {
+                "time": datetime.now().strftime(
+                    "%H:%M:%S"
+                ),
+                "from": self.get_node_id(),
+                "to": destination,
+                "text": text,
+                "direction": "TX",
+            }
 
-        self.messages.append(message)
-        self.save_message(message)
+            self.messages.append(message)
 
-        return packet
+            self.save_message(message)
+
+            return packet
 
     # ------------------------------------------------------------------
     # NODE INFORMATION
     # ------------------------------------------------------------------
 
     def get_node_id(self):
-        if not self.interface or not self.interface.myInfo:
-            return None
+        """Return the local Meshtastic node ID."""
 
-        return f"!{self.interface.myInfo.my_node_num:08x}"
+        with self._lock:
+            if not self.interface:
+                return None
+
+            if not self.interface.myInfo:
+                return None
+
+            return (
+                f"!{self.interface.myInfo.my_node_num:08x}"
+            )
 
     def get_nodes(self):
-        if not self.interface:
-            return []
+        """Return the current node database."""
 
-        return list(self.interface.nodes.values())
+        with self._lock:
+            if not self.interface:
+                return []
+
+            try:
+                return list(
+                    self.interface.nodes.values()
+                )
+            except Exception:
+                return []
 
     def get_node_count(self):
-        return len(self.get_nodes())
+        """Return the number of known mesh nodes."""
+
+        return len(
+            self.get_nodes()
+        )
 
     def get_local_node(self):
+        """Return the local node record."""
+
         node_id = self.get_node_id()
 
         if not node_id:
             return None
 
-        return self.interface.nodes.get(node_id)
+        with self._lock:
+            if not self.interface:
+                return None
+
+            try:
+                return self.interface.nodes.get(
+                    node_id
+                )
+            except Exception:
+                return None
 
     def get_local_info(self):
+        """Return useful information about the local node."""
+
         node = self.get_local_node()
 
         if not node:
             return {}
 
-        user = node.get("user", {})
-        metrics = node.get("deviceMetrics", {})
+        user = node.get(
+            "user",
+            {},
+        )
+
+        metrics = node.get(
+            "deviceMetrics",
+            {},
+        )
 
         return {
             "id": node.get("num"),
-            "node_id": user.get("id"),
+            "node_id": user.get(
+                "id",
+                "Unknown",
+            ),
             "long_name": user.get(
                 "longName",
                 "Unknown",
@@ -229,7 +345,13 @@ class FreeWaveRadio:
                 "hwModel",
                 "Unknown",
             ),
-            "battery": metrics.get("batteryLevel"),
-            "voltage": metrics.get("voltage"),
-            "uptime": metrics.get("uptimeSeconds"),
+            "battery": metrics.get(
+                "batteryLevel"
+            ),
+            "voltage": metrics.get(
+                "voltage"
+            ),
+            "uptime": metrics.get(
+                "uptimeSeconds"
+            ),
         }
