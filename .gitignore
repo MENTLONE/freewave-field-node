@@ -5,3 +5,13 @@ __pycache__/
 .env
 .DS_Store
 data/messages.jsonl
+
+# Local development checkpoints / known-good backups
+src/*.KNOWN-GOOD
+src/*.CRT-GREEN-KNOWN-GOOD
+src/*.before-*
+src/*.backup
+src/*.working
+src/*.broken-replacement
+src/*.current-broken
+src/*.live-working
